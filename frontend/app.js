@@ -1,5 +1,5 @@
 // API base URL
-const API_BASE = 'http://127.0.0.1:8002';
+const API_BASE = 'http://127.0.0.1:8003';
 
 // DOM elements
 const loginForm = document.getElementById('loginForm');
