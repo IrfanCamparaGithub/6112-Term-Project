@@ -41,12 +41,12 @@
 <body>
   <nav class="navbar navbar-expand-lg navbar-dark bg-dark shadow-sm border-bottom border-secondary">
     <div class="container d-flex align-items-center justify-content-between">
-      <!-- If you serve this file at /static/main.html, keep this link absolute to /static -->
       <a class="navbar-brand" href="/static/main.html">Alpha Dashboard</a>
 
       <div class="d-flex align-items-center gap-2">
-        <!-- FIXED: point to /static/news.html -->
         <a class="btn btn-sm btn-primary" href="/static/news.html" title="Latest market news">Market News</a>
+        <!-- NEW: Macro Dashboard link -->
+        <a class="btn btn-sm btn-outline-light" href="/static/macro.html" title="Macro indicators">Macro</a>
 
         <span class="navbar-text me-2" id="welcomeUser">Welcome!</span>
         <button class="btn btn-outline-light btn-sm" id="logoutBtn">Logout</button>
@@ -121,7 +121,6 @@
     </div>
   </div>
 
-  <!-- FIXED: load from /static -->
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
   <script src="/static/dashboard.js"></script>
 </body>
