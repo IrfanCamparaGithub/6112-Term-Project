@@ -8,6 +8,7 @@ from schemas import Make_New_User, Existing_User_Login
 
 import yfinance as yf
 import os
+import asyncio
 
 app = FastAPI(title="Alpha", version="1.0.0")
 app.mount("/static", StaticFiles(directory="frontend"), name="static")
@@ -47,20 +48,99 @@ def read_js(filename: str):
     raise HTTPException(status_code=404, detail="File not found")
 
 
-# Your API routes
+# Helper function to get financial data
+def get_financial_data(ticker: str):
+    try:
+        t = yf.Ticker(ticker)
+
+        # Get quarterly income statement
+        try:
+            quarterly_data = t.get_income_stmt(freq="quarterly")
+        except AttributeError:
+            quarterly_data = t.quarterly_income_stmt
+
+        if quarterly_data is None or quarterly_data.empty:
+            return {
+                "ticker": ticker.upper(),
+                "revenue_last_4": [],
+                "ebitda_last_4": [],
+                "net_income_last_4": [],
+                "error": "No financial data found"
+            }
+
+        # Extract revenue, EBITDA, and net income
+        revenue_values = []
+        ebitda_values = []
+        net_income_values = []
+
+        # Revenue (usually called "Total Revenue" or "Revenue")
+        revenue_names = ['Total Revenue', 'Revenue', 'TotalRevenue']
+        for name in revenue_names:
+            if name in quarterly_data.index:
+                revenue_values = [float(x) for x in quarterly_data.loc[name].iloc[:4].tolist()]
+                break
+
+        # EBITDA
+        ebitda_names = ['EBITDA', 'Ebitda']
+        for name in ebitda_names:
+            if name in quarterly_data.index:
+                ebitda_values = [float(x) for x in quarterly_data.loc[name].iloc[:4].tolist()]
+                break
+
+        # Net Income
+        net_income_names = ['Net Income', 'Net Income Common Stockholders', 'NetIncome']
+        for name in net_income_names:
+            if name in quarterly_data.index:
+                net_income_values = [float(x) for x in quarterly_data.loc[name].iloc[:4].tolist()]
+                break
+
+        return {
+            "ticker": ticker.upper(),
+            "revenue_last_4": revenue_values,
+            "ebitda_last_4": ebitda_values,
+            "net_income_last_4": net_income_values
+        }
+
+    except Exception as e:
+        return {
+            "ticker": ticker.upper(),
+            "revenue_last_4": [],
+            "ebitda_last_4": [],
+            "net_income_last_4": [],
+            "error": str(e)
+        }
+
+
+# Single ticker endpoint for all financial data
+@app.get("/financials/{ticker}")
+def get_financials(ticker: str = "AAPL"):
+    return get_financial_data(ticker)
+
+
+# Batch endpoint for multiple tickers
+@app.get("/financials/batch/{tickers}")
+async def get_batch_financials(tickers: str):
+    ticker_list = [t.strip().upper() for t in tickers.split(',') if t.strip()]
+
+    if not ticker_list:
+        raise HTTPException(status_code=400, detail="No tickers provided")
+
+    loop = asyncio.get_event_loop()
+
+    tasks = []
+    for ticker in ticker_list:
+        task = loop.run_in_executor(None, get_financial_data, ticker)
+        tasks.append(task)
+
+    results = await asyncio.gather(*tasks)
+    return results
+
+
+# Keep old endpoints for compatibility
 @app.get("/ebitda/{ticker}")
 def get_ebitda(ticker: str = "AAPL"):
-    t = yf.Ticker(ticker)
-    try:
-        quarterlyEBITDA = t.get_income_stmt(freq="quarterly")
-    except AttributeError:
-        quarterlyEBITDA = t.quarterly_income_stmt
-
-    if quarterlyEBITDA is None or quarterlyEBITDA.empty or "EBITDA" not in quarterlyEBITDA.index:
-        return {"ticker": ticker.upper(), "ebitda_last_4": []}
-
-    values = [float(x) for x in quarterlyEBITDA.loc["EBITDA"].iloc[:4].tolist()]
-    return {"ticker": ticker.upper(), "ebitda_last_4": values}
+    data = get_financial_data(ticker)
+    return {"ticker": data["ticker"], "ebitda_last_4": data["ebitda_last_4"]}
 
 
 @app.post("/register_user")

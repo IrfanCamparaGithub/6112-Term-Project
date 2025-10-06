@@ -1,7 +1,7 @@
 // API base URL
 const API_BASE = 'http://127.0.0.1:8002';
 
-// DOM elements - updated for your HTML structure
+// DOM elements
 const welcomeUser = document.getElementById('welcomeUser');
 const logoutBtn = document.getElementById('logoutBtn');
 const fetchDataBtn = document.getElementById('fetchDataBtn');
@@ -18,22 +18,11 @@ const competitorCards = document.getElementById('competitorCards');
 let ebitdaChart = null;
 let comparisonChart = null;
 
-// Common competitors by sector
-const COMPETITOR_MAP = {
-    'AAPL': ['MSFT', 'GOOGL', 'AMZN'],
-    'MSFT': ['AAPL', 'GOOGL', 'AMZN'],
-    'GOOGL': ['MSFT', 'AAPL', 'META'],
-    'AMZN': ['AAPL', 'MSFT', 'WMT'],
-    'TSLA': ['F', 'GM', 'RIVN'],
-    'META': ['GOOGL', 'SNAP', 'TWTR'],
-    'NFLX': ['DIS', 'CMCSA', 'PARA']
-};
-
 // Check if user is logged in
 document.addEventListener('DOMContentLoaded', () => {
     const username = localStorage.getItem('username');
     if (!username) {
-        window.location.href = 'index.html';
+        window.location.href = '/';
         return;
     }
 
@@ -47,11 +36,23 @@ document.addEventListener('DOMContentLoaded', () => {
     }, 1000);
 });
 
-// Logout handler
+// Logout handler - FIXED
 logoutBtn.addEventListener('click', () => {
+    console.log('🚪 Logging out...');
     localStorage.removeItem('username');
-    window.location.href = 'index.html';
+    // Use absolute path to ensure proper redirect
+    window.location.href = '/';
 });
+
+// Alternative logout function that you can also use
+function logout() {
+    console.log('🚪 Logging out user...');
+    localStorage.removeItem('username');
+    window.location.href = '/';
+}
+
+// Also attach logout to window for debugging
+window.logout = logout;
 
 // Fetch EBITDA data
 fetchDataBtn.addEventListener('click', fetchEBITDA);
@@ -63,10 +64,18 @@ tickerInput.addEventListener('keypress', (e) => {
 });
 
 async function fetchEBITDA() {
-    const ticker = tickerInput.value.trim().toUpperCase();
+    const input = tickerInput.value.trim().toUpperCase();
 
-    if (!ticker) {
-        showError('Please enter a stock ticker symbol (e.g., AAPL, MSFT, GOOGL)');
+    if (!input) {
+        showError('Please enter stock ticker symbols (e.g., AAPL or AAPL,MSFT,GOOGL)');
+        return;
+    }
+
+    // Parse multiple tickers
+    const tickers = input.split(',').map(t => t.trim()).filter(t => t);
+
+    if (tickers.length === 0) {
+        showError('Please enter valid stock ticker symbols');
         return;
     }
 
@@ -76,27 +85,46 @@ async function fetchEBITDA() {
     errorDisplay.classList.add('d-none');
 
     try {
-        console.log(`🔄 Fetching data for ${ticker}`);
+        console.log(`🔄 Fetching data for tickers:`, tickers);
 
-        const response = await fetch(`${API_BASE}/ebitda/${ticker}`);
+        let response;
+        let allData;
+
+        if (tickers.length === 1) {
+            // Single ticker - use individual endpoint
+            response = await fetch(`${API_BASE}/ebitda/${tickers[0]}`);
+            allData = [await response.json()];
+        } else {
+            // Multiple tickers - use batch endpoint
+            const tickersParam = tickers.join(',');
+            response = await fetch(`${API_BASE}/ebitda/batch/${tickersParam}`);
+            allData = await response.json();
+        }
 
         console.log(`📊 Response status: ${response.status}`);
 
         if (!response.ok) {
-            if (response.status === 404) {
-                throw new Error(`API endpoint not found. Check if server is running on port 8002.`);
-            } else if (response.status === 500) {
-                throw new Error(`Server error. Check server logs.`);
-            } else {
-                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-            }
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
         }
 
-        const data = await response.json();
-        console.log('✅ Data received:', data);
+        console.log('✅ Data received:', allData);
 
-        // For now, just display basic data without competitors
-        displayBasicEBITDA(data);
+        // Filter out tickers with no data
+        const validData = allData.filter(data => data.ebitda_last_4 && data.ebitda_last_4.length > 0);
+
+        if (validData.length === 0) {
+            showError('No EBITDA data found for any of the provided tickers. Try AAPL, MSFT, or GOOGL.');
+            return;
+        }
+
+        // Display the data
+        if (validData.length === 1) {
+            // Single company view
+            displaySingleCompany(validData[0]);
+        } else {
+            // Multi-company comparison view
+            displayMultiCompanyComparison(validData);
+        }
 
     } catch (error) {
         console.error('💥 Fetch error:', error);
@@ -111,78 +139,145 @@ async function fetchEBITDA() {
     }
 }
 
-function displayBasicEBITDA(data) {
-    // Clear existing table
-    if (ebitdaTableBody) {
-        ebitdaTableBody.innerHTML = '';
-    }
+function displaySingleCompany(mainData) {
+    // Clear existing content
+    if (ebitdaTableBody) ebitdaTableBody.innerHTML = '';
+    if (competitorCards) competitorCards.innerHTML = '';
 
-    if (data.ebitda_last_4 && data.ebitda_last_4.length > 0) {
-        // Display in table
-        data.ebitda_last_4.forEach((value, index) => {
-            const previousValue = data.ebitda_last_4[index + 1];
-            const change = previousValue ? value - previousValue : 0;
-            const changePercent = previousValue ? ((change / previousValue) * 100).toFixed(1) : 0;
+    // Display metrics for single company
+    displayMetrics([mainData]);
 
-            const row = document.createElement('tr');
-            row.innerHTML = `
-                <td>Quarter ${data.ebitda_last_4.length - index}</td>
-                <td>$${value.toLocaleString()}M</td>
-                <td class="${change >= 0 ? 'trend-up' : 'trend-down'}">
-                    ${change >= 0 ? '+' : ''}${change.toLocaleString()}M (${change >= 0 ? '+' : ''}${changePercent}%)
-                </td>
-                <td>
-                    <span class="${change >= 0 ? 'trend-up' : 'trend-down'}">
-                        ${change >= 0 ? '↗' : '↘'}
-                    </span>
-                </td>
-            `;
-            if (ebitdaTableBody) {
-                ebitdaTableBody.appendChild(row);
-            }
-        });
+    // Display table data
+    displayTableData(mainData);
 
-        // Update titles
-        const mainChartTitle = document.getElementById('mainChartTitle');
-        const tableTitle = document.getElementById('tableTitle');
+    // Create charts for single company
+    createSingleCompanyCharts(mainData);
 
-        if (mainChartTitle) mainChartTitle.textContent = `${data.ticker} - EBITDA Trend`;
-        if (tableTitle) tableTitle.textContent = `${data.ticker} - Quarterly EBITDA Details`;
+    // Update titles
+    updateTitles(`${mainData.ticker} Analysis`);
 
-        // Show data display
-        if (dataDisplay) {
-            dataDisplay.classList.remove('d-none');
-        }
-
-        // Create simple charts
-        createSimpleCharts(data);
-
-    } else {
-        showError(`No EBITDA data available for ${data.ticker}`);
-    }
+    // Show data display
+    dataDisplay.classList.remove('d-none');
 }
 
-function createSimpleCharts(data) {
+function displayMultiCompanyComparison(allData) {
+    // Clear existing content
+    if (ebitdaTableBody) ebitdaTableBody.innerHTML = '';
+    if (metricsRow) metricsRow.innerHTML = '';
+
+    // Display comparison metrics
+    displayComparisonMetrics(allData);
+
+    // Create comparison charts
+    createComparisonCharts(allData);
+
+    // Display competitor cards for all companies
+    displayAllCompanies(allData);
+
+    // Update titles
+    updateTitles(`Multi-Company Comparison (${allData.map(d => d.ticker).join(', ')})`);
+
+    // Show data display
+    dataDisplay.classList.remove('d-none');
+}
+
+function displayMetrics(companies) {
+    if (!metricsRow || companies.length === 0) return;
+
+    const company = companies[0];
+    const ebitdaData = company.ebitda_last_4;
+
+    const currentEBITDA = ebitdaData[0];
+    const previousEBITDA = ebitdaData[1] || currentEBITDA;
+    const growth = previousEBITDA ? ((currentEBITDA - previousEBITDA) / previousEBITDA * 100).toFixed(1) : 0;
+    const averageEBITDA = ebitdaData.reduce((a, b) => a + b, 0) / ebitdaData.length;
+
+    metricsRow.innerHTML = `
+        <div class="col-md-3">
+            <div class="metric-card">
+                <div class="metric-value">$${currentEBITDA.toLocaleString()}</div>
+                <div class="metric-label">Current Quarter EBITDA</div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="metric-card" style="background: linear-gradient(135deg, #28a745 0%, #20c997 100%);">
+                <div class="metric-value ${growth >= 0 ? 'trend-up' : 'trend-down'}">${growth}%</div>
+                <div class="metric-label">Quarterly Growth</div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="metric-card" style="background: linear-gradient(135deg, #ffc107 0%, #fd7e14 100%);">
+                <div class="metric-value">$${averageEBITDA.toLocaleString()}</div>
+                <div class="metric-label">Average EBITDA</div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="metric-card" style="background: linear-gradient(135deg, #6f42c1 0%, #e83e8c 100%);">
+                <div class="metric-value">${company.ebitda_last_4.length}</div>
+                <div class="metric-label">Quarters Analyzed</div>
+            </div>
+        </div>
+    `;
+}
+
+function displayComparisonMetrics(companies) {
+    if (!metricsRow) return;
+
+    // Show simple count of companies being compared
+    metricsRow.innerHTML = `
+        <div class="col-md-12">
+            <div class="metric-card">
+                <div class="metric-value">${companies.length} Companies</div>
+                <div class="metric-label">Comparing: ${companies.map(c => c.ticker).join(', ')}</div>
+            </div>
+        </div>
+    `;
+}
+
+function displayTableData(company) {
+    if (!ebitdaTableBody) return;
+
+    ebitdaTableBody.innerHTML = '';
+
+    company.ebitda_last_4.forEach((value, index) => {
+        const previousValue = company.ebitda_last_4[index + 1];
+        const change = previousValue ? value - previousValue : 0;
+        const changePercent = previousValue ? ((change / previousValue) * 100).toFixed(1) : 0;
+
+        const row = document.createElement('tr');
+        row.innerHTML = `
+            <td>Quarter ${company.ebitda_last_4.length - index}</td>
+            <td>$${value.toLocaleString()}</td>
+            <td class="${change >= 0 ? 'trend-up' : 'trend-down'}">
+                ${change >= 0 ? '+' : ''}${change.toLocaleString()} (${change >= 0 ? '+' : ''}${changePercent}%)
+            </td>
+            <td>
+                <span class="${change >= 0 ? 'trend-up' : 'trend-down'}">
+                    ${change >= 0 ? '↗' : '↘'}
+                </span>
+            </td>
+        `;
+        ebitdaTableBody.appendChild(row);
+    });
+}
+
+function createSingleCompanyCharts(company) {
     // Destroy existing charts
-    if (ebitdaChart) {
-        ebitdaChart.destroy();
-    }
-    if (comparisonChart) {
-        comparisonChart.destroy();
-    }
+    if (ebitdaChart) ebitdaChart.destroy();
+    if (comparisonChart) comparisonChart.destroy();
 
     // Create main EBITDA chart
     const ebitdaCtx = document.getElementById('ebitdaChart');
     if (ebitdaCtx) {
-        const quarters = ['Q4', 'Q3', 'Q2', 'Q1'].slice(-data.ebitda_last_4.length).reverse();
-        const ebitdaValues = [...data.ebitda_last_4].reverse();
+        const quarters = ['Q4', 'Q3', 'Q2', 'Q1'].slice(-company.ebitda_last_4.length).reverse();
+        const ebitdaValues = [...company.ebitda_last_4].reverse();
 
         ebitdaChart = new Chart(ebitdaCtx.getContext('2d'), {
             type: 'line',
             data: {
                 labels: quarters,
                 datasets: [{
-                    label: `${data.ticker} EBITDA ($M)`,
+                    label: `${company.ticker} EBITDA`,
                     data: ebitdaValues,
                     borderColor: '#667eea',
                     backgroundColor: 'rgba(102, 126, 234, 0.1)',
@@ -199,12 +294,20 @@ function createSimpleCharts(data) {
                         display: true,
                         text: 'Quarterly EBITDA Trend'
                     }
+                },
+                scales: {
+                    y: {
+                        title: {
+                            display: true,
+                            text: 'EBITDA ($)'
+                        }
+                    }
                 }
             }
         });
     }
 
-    // Create simple comparison chart (just the main company for now)
+    // Create simple bar chart for single company
     const comparisonCtx = document.getElementById('comparisonChart');
     if (comparisonCtx) {
         comparisonChart = new Chart(comparisonCtx.getContext('2d'), {
@@ -212,8 +315,8 @@ function createSimpleCharts(data) {
             data: {
                 labels: ['Latest Quarter'],
                 datasets: [{
-                    label: data.ticker,
-                    data: [data.ebitda_last_4[0]],
+                    label: company.ticker,
+                    data: [company.ebitda_last_4[0]],
                     backgroundColor: '#667eea',
                     borderColor: '#667eea',
                     borderWidth: 2
@@ -227,10 +330,143 @@ function createSimpleCharts(data) {
                         display: true,
                         text: 'Current Quarter EBITDA'
                     }
+                },
+                scales: {
+                    y: {
+                        title: {
+                            display: true,
+                            text: 'EBITDA ($)'
+                        }
+                    }
                 }
             }
         });
     }
+}
+
+function createComparisonCharts(companies) {
+    // Destroy existing charts
+    if (ebitdaChart) ebitdaChart.destroy();
+    if (comparisonChart) comparisonChart.destroy();
+
+    // Create comparison line chart
+    const ebitdaCtx = document.getElementById('ebitdaChart');
+    if (ebitdaCtx) {
+        const quarters = ['Q4', 'Q3', 'Q2', 'Q1'].slice(-4).reverse();
+        const colors = ['#667eea', '#28a745', '#ffc107', '#dc3545', '#6f42c1'];
+
+        const datasets = companies.map((company, index) => ({
+            label: company.ticker,
+            data: [...company.ebitda_last_4].reverse(),
+            borderColor: colors[index % colors.length],
+            backgroundColor: colors[index % colors.length] + '20',
+            borderWidth: 3,
+            fill: false,
+            tension: 0.4
+        }));
+
+        ebitdaChart = new Chart(ebitdaCtx.getContext('2d'), {
+            type: 'line',
+            data: {
+                labels: quarters,
+                datasets: datasets
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    title: {
+                        display: true,
+                        text: 'Multi-Company EBITDA Trends'
+                    }
+                },
+                scales: {
+                    y: {
+                        title: {
+                            display: true,
+                            text: 'EBITDA ($)'
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    // Create comparison bar chart
+    const comparisonCtx = document.getElementById('comparisonChart');
+    if (comparisonCtx) {
+        const colors = ['#667eea', '#28a745', '#ffc107', '#dc3545', '#6f42c1'];
+
+        const datasets = companies.map((company, index) => ({
+            label: company.ticker,
+            data: [company.ebitda_last_4[0]],
+            backgroundColor: colors[index % colors.length],
+            borderColor: colors[index % colors.length],
+            borderWidth: 2
+        }));
+
+        comparisonChart = new Chart(comparisonCtx.getContext('2d'), {
+            type: 'bar',
+            data: {
+                labels: ['Latest Quarter'],
+                datasets: datasets
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    title: {
+                        display: true,
+                        text: 'Current Quarter Comparison'
+                    }
+                },
+                scales: {
+                    y: {
+                        title: {
+                            display: true,
+                            text: 'EBITDA ($)'
+                        }
+                    }
+                }
+            }
+        });
+    }
+}
+
+function displayAllCompanies(companies) {
+    if (!competitorCards) return;
+
+    competitorCards.innerHTML = '';
+
+    companies.forEach(company => {
+        const currentEBITDA = company.ebitda_last_4[0];
+        const previousEBITDA = company.ebitda_last_4[1] || currentEBITDA;
+        const growth = previousEBITDA ? ((currentEBITDA - previousEBITDA) / previousEBITDA * 100).toFixed(1) : 0;
+
+        const card = document.createElement('div');
+        card.className = 'col-md-6 col-lg-3 mb-3';
+        card.innerHTML = `
+            <div class="card competitor-card h-100">
+                <div class="card-body">
+                    <h6 class="card-title">${company.ticker}</h6>
+                    <div class="metric-value">$${currentEBITDA.toLocaleString()}</div>
+                    <div class="metric-label">Current EBITDA</div>
+                    <div class="mt-2 ${growth >= 0 ? 'trend-up' : 'trend-down'}">
+                        <small>Quarterly Growth: ${growth >= 0 ? '+' : ''}${growth}%</small>
+                    </div>
+                </div>
+            </div>
+        `;
+        competitorCards.appendChild(card);
+    });
+}
+
+function updateTitles(title) {
+    const mainChartTitle = document.getElementById('mainChartTitle');
+    const tableTitle = document.getElementById('tableTitle');
+
+    if (mainChartTitle) mainChartTitle.textContent = title;
+    if (tableTitle) tableTitle.textContent = title;
 }
 
 function showError(message) {
@@ -242,9 +478,9 @@ function showError(message) {
 }
 
 // Test function for console
-window.testAPI = async function() {
+window.testAPI = async function(tickers = 'AAPL,MSFT') {
     try {
-        const response = await fetch(`${API_BASE}/ebitda/AAPL`);
+        const response = await fetch(`${API_BASE}/ebitda/batch/${tickers}`);
         console.log('Status:', response.status);
         const data = await response.json();
         console.log('Data:', data);
@@ -252,4 +488,11 @@ window.testAPI = async function() {
     } catch (error) {
         console.error('Error:', error);
     }
+};
+
+// Debug function to check login status
+window.checkLoginStatus = function() {
+    const username = localStorage.getItem('username');
+    console.log('🔐 Login status:', username ? `Logged in as ${username}` : 'Not logged in');
+    return username;
 };
